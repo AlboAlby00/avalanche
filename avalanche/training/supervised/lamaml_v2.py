@@ -93,6 +93,7 @@ class LaMAML(SupervisedMetaLearningTemplate):
         self.alpha_params: nn.ParameterDict = nn.ParameterDict()
         self.alpha_params_initialized: bool = False
         self.meta_losses: List[Tensor] = []
+        self.grad_sqr_sums = {}
 
         self.buffer = Buffer(
             max_buffer_size=max_buffer_size,
@@ -196,12 +197,37 @@ class LaMAML(SupervisedMetaLearningTemplate):
         ]
 
         # New fast parameters
-        new_fast_params = {
-            n: param - alpha * grad if grad is not None else param
-            for ((n, param), alpha, grad) in zip(
-                fast_params.items(), self.alpha_params.parameters(), grads
-            )
-        }
+        optim = "classp"
+
+        if optim == "sdg":
+            # SGD update
+            new_fast_params = {
+                n: param - alpha * grad if grad is not None else param
+                for ((n, param), alpha, grad) in zip(
+                    fast_params.items(), self.alpha_params.parameters(), grads
+                )
+            }
+        elif optim == "classp":
+            # Adagrad update
+            for (name, param), grad in zip(fast_params.items(), grads):
+                if grad is not None:
+                    if name not in self.grad_sqr_sums:
+                        self.grad_sqr_sums[name] = torch.zeros_like(grad)
+                    self.grad_sqr_sums[name] += grad ** 2
+
+            new_fast_params = {}
+            for (n, param), alpha, grad in zip(fast_params.items(), self.alpha_params.parameters(), grads):
+                if grad is not None:
+                    mask = self.grad_sqr_sums[n] > 100
+                    mask = torch.zeros_like(grad)
+                    new_value = param - alpha * grad / (torch.sqrt(self.grad_sqr_sums[n]) + 1e-8) * mask
+                else:
+                    new_value = param
+                new_fast_params[n] = new_value
+            
+        else:
+            raise ValueError(f"Unknown optimizer: {self.optimizer}")
+        
 
         return new_fast_params
 
@@ -297,7 +323,7 @@ class Buffer:
         self.device = device
 
     def update(self, strategy):
-        self.storage_policy.update(strategy)
+        self.storage_policy.post_adapt(strategy, strategy.experience)
 
     def __len__(self):
         return len(self.storage_policy.buffer)

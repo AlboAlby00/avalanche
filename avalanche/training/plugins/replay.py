@@ -120,4 +120,4 @@ class ReplayPlugin(SupervisedPlugin, supports_distributed=True):
         )
 
     def after_training_exp(self, strategy: "SupervisedTemplate", **kwargs):
-        self.storage_policy.update(strategy, **kwargs)
+        self.storage_policy.post_adapt(strategy, strategy.experience)

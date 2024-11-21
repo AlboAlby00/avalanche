@@ -4,3 +4,4 @@ from .wandb_logger import *
 from .text_logging import *
 from .interactive_logging import *
 from .csv_logger import *
+from .minimal_text_logger import *

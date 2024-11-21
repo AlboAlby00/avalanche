@@ -13,6 +13,7 @@ from typing import Optional, Sequence, Union, Any
 import torch
 from PIL.Image import Image
 from torch import Tensor
+from copy import deepcopy
 from torchvision.transforms import (
     ToTensor,
     ToPILImage,
@@ -172,7 +173,9 @@ def PermutedMNIST(
     seed: Optional[int] = None,
     train_transform: Optional[Any] = _default_mnist_train_transform,
     eval_transform: Optional[Any] = _default_mnist_eval_transform,
-    dataset_root: Optional[Union[str, Path]] = None
+    dataset_root: Optional[Union[str, Path]] = None,
+    num_train_images_per_task: Optional[int] = None,
+    num_test_images_per_task: Optional[int] = None
 ) -> NCScenario:
     """
     Creates a Permuted MNIST benchmark.
@@ -225,6 +228,7 @@ def PermutedMNIST(
     list_train_dataset = []
     list_test_dataset = []
     rng_permute = np.random.RandomState(seed)
+    torch.manual_seed(seed=seed)
 
     mnist_train, mnist_test = get_mnist_dataset(dataset_root)
 
@@ -235,14 +239,29 @@ def PermutedMNIST(
 
         permutation = PixelsPermutation(idx_permute)
 
+        # Optionally limit the dataset size
+        if num_train_images_per_task is not None:
+            total_train_images = len(mnist_train)
+            train_indices = torch.randperm(total_train_images)[:min(total_train_images,num_train_images_per_task)]
+            small_mnist_train = deepcopy(torch.utils.data.Subset(mnist_train, train_indices))
+        else:
+            small_mnist_train = mnist_train
+
+        if num_test_images_per_task is not None:
+            total_test_images = len(mnist_test)
+            test_indices = torch.randperm(total_test_images)[:min(total_test_images,num_test_images_per_task)]
+            small_mnist_test = deepcopy(torch.utils.data.Subset(mnist_test, test_indices))
+        else:
+            small_mnist_test = mnist_test
+
         # Freeze the permutation
         permuted_train = make_avalanche_dataset(
-            _make_taskaware_classification_dataset(mnist_train),
+            _make_taskaware_classification_dataset(small_mnist_train),
             frozen_transform_groups=DefaultTransformGroups((permutation, None)),
         )
 
         permuted_test = make_avalanche_dataset(
-            _make_taskaware_classification_dataset(mnist_test),
+            _make_taskaware_classification_dataset(small_mnist_test),
             frozen_transform_groups=DefaultTransformGroups((permutation, None)),
         )
 
@@ -270,7 +289,8 @@ def RotatedMNIST(
     rotations_list: Optional[Sequence[int]] = None,
     train_transform: Optional[Any] = _default_mnist_train_transform,
     eval_transform: Optional[Any] = _default_mnist_eval_transform,
-    dataset_root: Optional[Union[str, Path]] = None
+    dataset_root: Optional[Union[str, Path]] = None,
+    num_images_per_task: Optional[int] = None
 ) -> NCScenario:
     """Creates a Rotated MNIST benchmark.
 
@@ -350,11 +370,20 @@ def RotatedMNIST(
             # choose a random rotation of the pixels in the image
             rotation_angle = rng_rotate.randint(-180, 181)
 
+                # Optionally limit the dataset size
+        if num_images_per_task is not None:
+            total_train_images = len(mnist_train)
+            total_test_images = len(mnist_test)
+            train_indices = torch.randperm(total_train_images)[:num_images_per_task]
+            test_indices = torch.randperm(total_test_images)[:num_images_per_task]
+            small_mnist_train = deepcopy(torch.utils.data.Subset(mnist_train, train_indices))
+            small_mnist_test = deepcopy(torch.utils.data.Subset(mnist_test, train_indices))
+
         rotation = RandomRotation(degrees=(rotation_angle, rotation_angle))
 
         # Freeze the rotation
         rotated_train = make_avalanche_dataset(
-            _make_taskaware_classification_dataset(mnist_train),
+            _make_taskaware_classification_dataset(small_mnist_train),
             frozen_transform_groups=DefaultTransformGroups((rotation, None)),
         )
 
