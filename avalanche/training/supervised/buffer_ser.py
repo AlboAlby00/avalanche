@@ -16,6 +16,7 @@ from avalanche.training.plugins.evaluation import (
     default_evaluator,
 )
 from avalanche.training.templates import SupervisedTemplate
+from avalanche.models import avalanche_forward
 
 
 class SER(SupervisedTemplate):
@@ -61,6 +62,7 @@ class SER(SupervisedTemplate):
         :param batch_size_mem: int : Size of the batch sampled from the buffer
         :param alpha: float : Hyperparameter weighting the backward consistency loss
         :param beta: float : Hyperparameter weighting the forward consistency loss
+        :param buffer_transforms: transformation to be applied to the buffer
         :param train_mb_size: mini-batch size for training.
         :param train_passes: number of training passes.
         :param eval_mb_size: mini-batch size for eval.
@@ -129,7 +131,7 @@ class SER(SupervisedTemplate):
 
             # Forward
             self._before_forward(**kwargs)
-            self.mb_output = self.model(self.mb_x)
+            self.mb_output = avalanche_forward(self.model, self.mb_x, self.mb_task_id)
             self._after_forward(**kwargs)
 
             self.loss += F.cross_entropy(
@@ -139,35 +141,33 @@ class SER(SupervisedTemplate):
 
             if not self.is_first_experience:
 
-                buf_inputs, buf_labels, buf_logits = self.buffer.get_data(
+                buffer_x, buffer_y, buffer_logits, buffer_task_id = self.buffer.get_data(
                     self.batch_size_mem
-                )
-                buf_inputs, buf_labels, buf_logits = (
-                    buf_inputs.to(self.device),
-                    buf_labels.to(self.device),
-                    buf_logits.to(self.device),
                 )
 
                 # Classification loss on memory
-                buffer_output = self.model(buf_inputs)
+                buffer_output = avalanche_forward(self.model, buffer_x, buffer_task_id)
 
                 self.loss += F.cross_entropy(
                     buffer_output,
-                    buf_labels,
+                    buffer_y,
                 )
 
                 # Backward consistency loss on memory data
                 self.loss += self.alpha * F.mse_loss(
                     buffer_output,
-                    buf_logits.detach(),
+                    buffer_logits.detach(),
                 )
 
                 # Forward consistency loss on current task data
-                old_mb_output = self.old_model(self.mb_x)
+                old_mb_output = avalanche_forward(self.old_model, self.mb_x, self.mb_task_id)
                 self.loss += self.beta * F.mse_loss(old_mb_output, self.mb_output)
 
             self.buffer.add_data(
-                examples=self.mb_x, labels=self.mb_y, logits=self.mb_output
+                examples=self.mb_x,
+                labels=self.mb_y,
+                logits=self.mb_output,
+                task_labels=self.mb_task_id
             )
 
             self._before_backward(**kwargs)
@@ -180,6 +180,9 @@ class SER(SupervisedTemplate):
             self._after_update(**kwargs)
 
             self._after_training_iteration(**kwargs)
+
+
+### Buffer
 
 
 def reservoir(num_seen_examples: int, buffer_size: int) -> int:
@@ -211,8 +214,19 @@ class Buffer:
         self.attributes = ["examples", "labels", "logits", "task_labels"]
         self.transforms = transforms
 
+    def _init_tensors(
+        self,
+        examples: torch.Tensor,
+        labels: torch.Tensor,
+        logits: torch.Tensor,
+        task_labels: torch.Tensor,
+    ) -> None:
         """
         Initializes just the required tensors.
+        :param examples: tensor containing the images
+        :param labels: tensor containing the labels
+        :param logits: tensor containing the outputs of the network
+        :param task_labels: tensor containing the task labels
         """
         for attr_str in self.attributes:
             attr = eval(attr_str)
@@ -228,13 +242,6 @@ class Buffer:
                     ),
                 )
 
-    def to(self, device):
-        self.device = device
-        for attr_str in self.attributes:
-            if hasattr(self, attr_str):
-                setattr(self, attr_str, getattr(self, attr_str).to(device))
-        return self
-
     def __len__(self):
         return min(self.num_seen_examples, self.buffer_size)
 
@@ -247,6 +254,8 @@ class Buffer:
         :param task_labels: tensor containing the task labels
         :return:
         """
+        if not hasattr(self, "examples"):
+            self._init_tensors(examples, labels, logits, task_labels)
 
         for i in range(examples.shape[0]):
             index = reservoir(self.num_seen_examples, self.buffer_size)
