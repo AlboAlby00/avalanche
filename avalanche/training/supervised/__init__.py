@@ -13,6 +13,8 @@ from .icarl import ICaRL
 from .er_ace import ER_ACE
 from .er_aml import ER_AML
 from .der import DER
+from .ser import SER
+from .meta_ser import MetaSER
 from .l2p import LearningToPrompt
 from .supervised_contrastive_replay import SCR
 from .expert_gate import ExpertGateStrategy
