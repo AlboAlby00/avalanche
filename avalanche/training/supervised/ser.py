@@ -148,7 +148,6 @@ class SER(SupervisedTemplate):
 
     def training_epoch(self, **kwargs):
         """Training epoch.
-
         :param kwargs:
         :return:
         """
@@ -164,19 +163,26 @@ class SER(SupervisedTemplate):
 
             # Forward
             self._before_forward(**kwargs)
-            self.mb_output = self.forward()
-            with torch.no_grad():
-                old_mb_output = avalanche_forward(
-                    self.old_model, self.mb_x, self.mb_task_id
-                )
+            random_permutation = torch.randperm(self.mb_x.size(0))
+            shuffled_output = avalanche_forward(
+                self.model,
+                self.mb_x[random_permutation],
+                self.mb_task_id[random_permutation],
+            )
+            self.mb_output = shuffled_output[torch.argsort(random_permutation)]
             self._after_forward(**kwargs)
 
             if self.replay_loader is not None:
 
-                # Classification loss on current task and memory data
+                # Classification loss on current task
                 self.loss += F.cross_entropy(
-                    self.mb_output[:],
-                    self.mb_y[:],
+                    self.mb_output[self.batch_size_mem :],
+                    self.mb_y[self.batch_size_mem :],
+                )
+                # Classification loss on memory
+                self.loss += F.cross_entropy(
+                    self.mb_output[: self.batch_size_mem],
+                    self.mb_y[: self.batch_size_mem],
                 )
                 # Backward consistency loss on memory data
                 self.loss += self.alpha * F.mse_loss(
@@ -184,8 +190,14 @@ class SER(SupervisedTemplate):
                     self.batch_logits,
                 )
                 # Forward consistency loss on current task data
+                with torch.no_grad():
+                    old_mb_output = avalanche_forward(
+                        self.old_model,
+                        self.mb_x[self.batch_size_mem :],
+                        self.mb_task_id[self.batch_size_mem :],
+                    )
                 self.loss += self.beta * F.mse_loss(
-                    old_mb_output[self.batch_size_mem :],
+                    old_mb_output,
                     self.mb_output[self.batch_size_mem :],
                 )
 
